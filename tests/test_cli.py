@@ -44,9 +44,9 @@ class FakeTagger:
 
 @pytest.fixture(autouse=True)
 def fake_tagger(monkeypatch: pytest.MonkeyPatch) -> None:
-    def factory(name: str, *, variant: str, device: str) -> FakeTagger:
+    def factory(name: str, *, variant: str | None, device: str) -> FakeTagger:
         assert name == "oppai-oracle"
-        assert variant in {"v1", "v1.1"}
+        assert variant is None
         assert device
         return FakeTagger()
 
@@ -67,7 +67,7 @@ def test_single_image_prints_only_tags_to_stdout(
     assert main([str(image)]) == 0
     captured = capsys.readouterr()
     assert captured.out == "long hair, 1girl\n"
-    assert "Using oppai-oracle v1.1 on cpu" in captured.err
+    assert "Using fake on cpu" in captured.err
 
 
 def test_single_image_can_keep_underscores(
@@ -171,6 +171,53 @@ def test_exclude_named_expands_all_named_categories(
 
     monkeypatch.setattr(nekotagger.cli, "lookup_category_exclusions", lookup)
     assert main([str(image), "--exclude-named"]) == 0
+
+
+def test_model_native_categories_do_not_load_external_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class NativeFakeTagger(FakeTagger):
+        name = "camie-v2"
+
+        @property
+        def category_names(self) -> set[str]:
+            return {"general", "character"}
+
+        def tags_in_categories(self, categories: set[str]) -> set[str]:
+            assert categories == {"character"}
+            return {"long_hair"}
+
+    image = tmp_path / "a.png"
+    _save_image(image)
+
+    def factory(
+        name: str,
+        *,
+        variant: str | None,
+        device: str,
+    ) -> NativeFakeTagger:
+        assert name == "camie-v2"
+        assert variant is None
+        assert device
+        return NativeFakeTagger()
+
+    def unexpected_lookup(*args: object, **kwargs: object) -> CategoryLookup:
+        pytest.fail("external metadata must not be loaded")
+
+    monkeypatch.setattr(nekotagger.cli, "create_tagger", factory)
+    monkeypatch.setattr(
+        nekotagger.cli,
+        "lookup_category_exclusions",
+        unexpected_lookup,
+    )
+    assert main(
+        [str(image), "--tagger", "camie-v2", "--exclude-category", "character"]
+    ) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "1girl\n"
+    assert "model-native tag categories" in captured.err
 
 
 def test_single_image_rejects_output_options(

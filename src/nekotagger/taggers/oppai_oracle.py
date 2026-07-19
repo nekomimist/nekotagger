@@ -7,7 +7,6 @@ import binascii
 import gzip
 import hashlib
 import json
-import re
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -20,11 +19,11 @@ from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from nekotagger.errors import InputError, ModelError
+from nekotagger.taggers.onnx_runtime import create_session
 from nekotagger.types import TagPrediction
 
 MODEL_REPO = "Grio43/OppaiOracle"
 MODEL_REVISION = "96992fa30568c386e9fe7c8a1a68f798a3202c09"
-_DEVICE_PATTERN = re.compile(r"^cuda(?::(?P<index>[0-9]+))?$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,18 +227,6 @@ def preprocess_image(
     return pixels.transpose(2, 0, 1), padding_mask
 
 
-def _parse_device(device: str) -> tuple[bool, bool, int]:
-    if device == "auto":
-        return True, False, 0
-    if device == "cpu":
-        return False, True, 0
-    match = _DEVICE_PATTERN.fullmatch(device)
-    if match:
-        index = int(match.group("index") or 0)
-        return True, True, index
-    raise InputError("device must be auto, cpu, cuda, or cuda:N")
-
-
 class OppaiOracleTagger:
     """OppaiOracle V1/V1.1 inference through ONNX Runtime."""
 
@@ -269,61 +256,16 @@ class OppaiOracleTagger:
     def load(self) -> None:
         if self._session is not None:
             return
-        wants_cuda, strict, device_index = _parse_device(self._device_request)
-        if wants_cuda and hasattr(ort, "preload_dlls"):
-            try:
-                ort.preload_dlls(directory="")
-            except Exception as error:
-                if strict:
-                    raise ModelError(f"failed to preload CUDA/cuDNN libraries: {error}") from error
-                warnings.warn(
-                    f"could not preload CUDA/cuDNN libraries; CPU fallback may be used: {error}",
-                    stacklevel=2,
-                )
-
         assets = _download_assets(self._spec)
         model_config = _read_json(assets.config)
         preprocessing_data = _read_json(assets.preprocessing)
         self._preprocess = _load_preprocess_config(preprocessing_data)
 
-        available = ort.get_available_providers()
-        providers: list[str | tuple[str, dict[str, str]]]
-        if wants_cuda and "CUDAExecutionProvider" in available:
-            providers = [
-                ("CUDAExecutionProvider", {"device_id": str(device_index)}),
-                "CPUExecutionProvider",
-            ]
-        elif wants_cuda and strict:
-            raise ModelError(
-                "CUDAExecutionProvider is unavailable; "
-                "use --device cpu or repair CUDA/driver access"
-            )
-        else:
-            if wants_cuda:
-                warnings.warn(
-                    "CUDAExecutionProvider is unavailable; falling back to CPU",
-                    stacklevel=2,
-                )
-            providers = ["CPUExecutionProvider"]
-
-        self._session = self._create_session(assets.model, providers)
+        self._session, self.active_device = create_session(
+            assets.model,
+            self._device_request,
+        )
         try:
-            session_providers = self._session.get_providers()
-            if wants_cuda and "CUDAExecutionProvider" not in session_providers:
-                if strict:
-                    raise ModelError(
-                        "ONNX Runtime initialized without CUDAExecutionProvider; "
-                        "use --device cpu or repair CUDA/cuDNN access"
-                    )
-                warnings.warn(
-                    "ONNX Runtime could not initialize CUDA; falling back to CPU",
-                    stacklevel=2,
-                )
-                self.active_device = "cpu"
-            elif wants_cuda:
-                self.active_device = f"cuda:{device_index}"
-            else:
-                self.active_device = "cpu"
             self._inspect_session(model_config)
             try:
                 model_metadata = dict(
@@ -340,29 +282,6 @@ class OppaiOracleTagger:
             self._session = None
             self.active_device = "unloaded"
             raise
-
-    @staticmethod
-    def _create_session(
-        model_path: Path,
-        providers: list[str | tuple[str, dict[str, str]]],
-    ) -> ort.InferenceSession:
-        last_error: Exception | None = None
-        for optimization in (
-            ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
-            ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
-        ):
-            options = ort.SessionOptions()
-            options.graph_optimization_level = optimization
-            try:
-                return ort.InferenceSession(
-                    str(model_path),
-                    sess_options=options,
-                    providers=providers,
-                )
-            except Exception as error:
-                last_error = error
-        assert last_error is not None
-        raise ModelError(f"failed to initialize ONNX model: {last_error}") from last_error
 
     def _inspect_session(self, model_config: dict[str, Any]) -> None:
         assert self._session is not None

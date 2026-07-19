@@ -30,7 +30,12 @@ from nekotagger.tag_filters import (
 )
 from nekotagger.tag_metadata import lookup_category_exclusions
 from nekotagger.taggers.registry import create_tagger, tagger_names
-from nekotagger.types import Tagger, TagPrediction, VocabularyProvider
+from nekotagger.types import (
+    CategoryProvider,
+    Tagger,
+    TagPrediction,
+    VocabularyProvider,
+)
 
 T = TypeVar("T")
 
@@ -79,8 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--variant",
         choices=("v1.1", "v1"),
-        default="v1.1",
-        help="OppaiOracle variant (default: %(default)s)",
+        help="OppaiOracle variant (default for OppaiOracle: v1.1)",
     )
     parser.add_argument(
         "--device",
@@ -91,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--threshold",
         type=float,
-        help="minimum confidence (OppaiOracle default: 0.65)",
+        help="minimum confidence (model-specific default)",
     )
     parser.add_argument(
         "--max-tags",
@@ -116,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CATEGORY",
         help=(
             "exclude a tag category; repeat for multiple categories "
-            "(general, artist, copyright, character, meta)"
+            "(general, artist, copyright, character, meta, rating, year)"
         ),
     )
     parser.add_argument(
@@ -213,25 +217,44 @@ def _build_prediction_filter(
                 f"tagger {args.tagger} does not expose a vocabulary "
                 "required for category filtering"
             )
-        lookup = lookup_category_exclusions(
-            vocabulary,
-            categories,
-            metadata_path=args.tag_metadata,
-        )
-        excluded_tags.update(lookup.excluded_tags)
         category_text = ", ".join(
             category.value for category in sorted(categories, key=lambda item: item.value)
         )
-        print(
-            f"Tag metadata matched {lookup.matched_count}/{lookup.vocabulary_count} "
-            f"vocabulary tags; {lookup.unknown_count} unknown tag(s) will be kept.",
-            file=sys.stderr,
-        )
-        print(
-            f"Excluding {len(lookup.excluded_tags)} tag(s) in categories: "
-            f"{category_text}",
-            file=sys.stderr,
-        )
+        if isinstance(tagger, CategoryProvider) and args.tag_metadata is None:
+            requested = {category.value for category in categories}
+            unsupported = requested - set(tagger.category_names)
+            if unsupported:
+                unsupported_text = ", ".join(sorted(unsupported))
+                raise InputError(
+                    f"tagger {args.tagger} does not support category: {unsupported_text}"
+                )
+            native_tags = {
+                normalize_tag_name(tag)
+                for tag in tagger.tags_in_categories(requested)
+            }
+            excluded_tags.update(native_tags)
+            print(
+                f"Using model-native tag categories; excluding {len(native_tags)} "
+                f"tag(s) in categories: {category_text}",
+                file=sys.stderr,
+            )
+        else:
+            lookup = lookup_category_exclusions(
+                vocabulary,
+                categories,
+                metadata_path=args.tag_metadata,
+            )
+            excluded_tags.update(lookup.excluded_tags)
+            print(
+                f"Tag metadata matched {lookup.matched_count}/{lookup.vocabulary_count} "
+                f"vocabulary tags; {lookup.unknown_count} unknown tag(s) will be kept.",
+                file=sys.stderr,
+            )
+            print(
+                f"Excluding {len(lookup.excluded_tags)} tag(s) in categories: "
+                f"{category_text}",
+                file=sys.stderr,
+            )
     if vocabulary is not None:
         normalized_vocabulary = {
             normalize_tag_name(tag_name)
@@ -264,7 +287,7 @@ def _load_tagger(
     if batch_size is None:
         batch_size = 4 if tagger.active_device.startswith("cuda:") else 1
     print(
-        f"Using {args.tagger} {args.variant} on {tagger.active_device}",
+        f"Using {tagger.name} on {tagger.active_device}",
         file=sys.stderr,
     )
     prediction_filter = _build_prediction_filter(args, tagger, max_tags)

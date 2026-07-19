@@ -17,6 +17,8 @@ class TagCategory(str, Enum):
     COPYRIGHT = "copyright"
     CHARACTER = "character"
     META = "meta"
+    RATING = "rating"
+    YEAR = "year"
 
 
 NAMED_CATEGORIES = frozenset(

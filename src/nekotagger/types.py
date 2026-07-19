@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -45,3 +45,15 @@ class VocabularyProvider(Protocol):
     @property
     def vocabulary(self) -> Sequence[str]:
         """Return raw tag names in the model vocabulary after loading."""
+
+
+@runtime_checkable
+class CategoryProvider(Protocol):
+    """Optional model-native tag category capability."""
+
+    @property
+    def category_names(self) -> Collection[str]:
+        """Return category names understood by the model."""
+
+    def tags_in_categories(self, categories: Collection[str]) -> Collection[str]:
+        """Return raw tag names belonging to any requested category."""

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "nekotagger"
 version = "0.1.0"
-description = "Extensible command-line image tagger with OppaiOracle support"
+description = "Extensible command-line image tagger with OppaiOracle and Camie v2 support"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
@@ -36,7 +36,7 @@ packages = ["src/nekotagger"]
 addopts = "-ra"
 testpaths = ["tests"]
 markers = [
-    "model: downloads and runs the real OppaiOracle model",
+    "model: downloads and runs a real tagger model",
 ]
 
 [tool.ruff]
