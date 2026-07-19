@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nekotagger"
+version = "0.1.0"
+description = "Extensible command-line image tagger with OppaiOracle support"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "huggingface-hub>=0.25,<2",
+    "numpy>=1.26,<3",
+    "onnxruntime-gpu[cuda,cudnn]==1.23.2",
+    "pillow>=10.3,<13",
+    "tqdm>=4.66,<5",
+]
+
+[project.scripts]
+nekotagger = "nekotagger.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+    "types-tqdm>=4.67,<5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nekotagger"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+    "model: downloads and runs the real OppaiOracle model",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["nekotagger"]
+
+[[tool.mypy.overrides]]
+module = ["onnxruntime"]
+ignore_missing_imports = true
