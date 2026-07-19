@@ -8,6 +8,8 @@ from PIL import Image
 
 import nekotagger.cli
 from nekotagger.cli import main
+from nekotagger.tag_filters import NAMED_CATEGORIES, TagCategory
+from nekotagger.tag_metadata import CategoryLookup
 from nekotagger.types import TagPrediction
 
 
@@ -16,6 +18,10 @@ class FakeTagger:
     default_threshold = 0.65
     default_max_tags = 50
     active_device = "cpu"
+
+    @property
+    def vocabulary(self) -> Sequence[str]:
+        return ("long_hair", "1girl")
 
     def load(self) -> None:
         return None
@@ -72,6 +78,99 @@ def test_single_image_can_keep_underscores(
     _save_image(image)
     assert main([str(image), "--keep-underscores", "--max-tags", "1"]) == 0
     assert capsys.readouterr().out == "long_hair\n"
+
+
+def test_exact_exclusion_is_applied_before_max_tags(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    image = tmp_path / "a.png"
+    _save_image(image)
+    assert main(
+        [str(image), "--exclude-tag", "long hair", "--max-tags", "1"]
+    ) == 0
+    assert capsys.readouterr().out == "1girl\n"
+
+
+def test_excluded_tags_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    image = tmp_path / "a.png"
+    exclusions = tmp_path / "exclude.txt"
+    _save_image(image)
+    exclusions.write_text("# custom exclusions\nlong_hair\n", encoding="utf-8")
+    assert main(
+        [str(image), "--exclude-tags-file", str(exclusions)]
+    ) == 0
+    assert capsys.readouterr().out == "1girl\n"
+
+
+def test_category_exclusion_uses_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    image = tmp_path / "a.png"
+    metadata = tmp_path / "tags.parquet"
+    _save_image(image)
+    metadata.touch()
+
+    def lookup(
+        vocabulary: Sequence[str],
+        categories: set[TagCategory],
+        *,
+        metadata_path: Path | None,
+    ) -> CategoryLookup:
+        assert tuple(vocabulary) == ("long_hair", "1girl")
+        assert categories == {TagCategory.CHARACTER}
+        assert metadata_path == metadata
+        return CategoryLookup(
+            excluded_tags=frozenset({"long_hair"}),
+            matched_count=2,
+            vocabulary_count=2,
+            source_path=metadata,
+        )
+
+    monkeypatch.setattr(nekotagger.cli, "lookup_category_exclusions", lookup)
+    assert main(
+        [
+            str(image),
+            "--exclude-category",
+            "character",
+            "--tag-metadata",
+            str(metadata),
+        ]
+    ) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "1girl\n"
+    assert "matched 2/2" in captured.err
+
+
+def test_exclude_named_expands_all_named_categories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = tmp_path / "a.png"
+    _save_image(image)
+
+    def lookup(
+        vocabulary: Sequence[str],
+        categories: set[TagCategory],
+        *,
+        metadata_path: Path | None,
+    ) -> CategoryLookup:
+        assert categories == set(NAMED_CATEGORIES)
+        assert metadata_path is None
+        return CategoryLookup(
+            excluded_tags=frozenset(),
+            matched_count=len(vocabulary),
+            vocabulary_count=len(vocabulary),
+            source_path=tmp_path / "cached.parquet",
+        )
+
+    monkeypatch.setattr(nekotagger.cli, "lookup_category_exclusions", lookup)
+    assert main([str(image), "--exclude-named"]) == 0
 
 
 def test_single_image_rejects_output_options(
@@ -139,6 +238,10 @@ def test_bad_image_does_not_stop_directory(
         (["--threshold", "1.1"], "--threshold must be between 0 and 1"),
         (["--max-tags", "-1"], "--max-tags must be 0 or greater"),
         (["--batch-size", "0"], "--batch-size must be greater than 0"),
+        (
+            ["--tag-metadata", "tags.parquet"],
+            "--tag-metadata requires --exclude-category or --exclude-named",
+        ),
     ],
 )
 def test_numeric_validation(

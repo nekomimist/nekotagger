@@ -262,6 +262,10 @@ class OppaiOracleTagger:
         self._output_name: str | None = None
         self.active_device = "unloaded"
 
+    @property
+    def vocabulary(self) -> Sequence[str]:
+        return self._tag_names
+
     def load(self) -> None:
         if self._session is not None:
             return

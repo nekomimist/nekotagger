@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from PIL import Image
 
@@ -36,3 +36,12 @@ class Tagger(Protocol):
         max_tags: int | None,
     ) -> list[list[TagPrediction]]:
         """Return confidence-sorted predictions for every image."""
+
+
+@runtime_checkable
+class VocabularyProvider(Protocol):
+    """Optional capability required for category-aware filtering."""
+
+    @property
+    def vocabulary(self) -> Sequence[str]:
+        """Return raw tag names in the model vocabulary after loading."""

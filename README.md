@@ -83,6 +83,76 @@ uv run nekotagger image.png --keep-underscores
 通常はunderscoreを空白へ変換し、カンマと空白で区切ります。`<PAD>` と `<UNK>` は
 常に除外します。
 
+## タグの除外
+
+characterやartistなどのカテゴリを指定して除外できます。同じオプションを繰り返すと
+複数カテゴリを除外します。
+
+```bash
+uv run nekotagger image.png \
+  --exclude-category character \
+  --exclude-category artist
+
+# artist、copyright、characterをまとめて除外
+uv run nekotagger image.png --exclude-named
+```
+
+利用できるカテゴリは `general`, `artist`, `copyright`, `character`, `meta` です。
+
+カテゴリの意味と代表例:
+
+| カテゴリ | 意味 | 例 |
+| --- | --- | --- |
+| `general` | 画像に見えている人物、物、特徴、構図 | `1girl`, `long_hair`, `blue_eyes` |
+| `artist` | 作者・サークル名 | `kantoku`, `refeia` |
+| `copyright` | 作品、シリーズ、フランチャイズ名 | `kantai_collection`, `umamusume`, `onii-chan_wa_oshimai!` |
+| `character` | キャラクター名 | `hatsune_miku`, `rem_(re:zero)` |
+| `meta` | 画像・投稿・制作方法・管理状態に関する情報 | `highres`, `official_art`, `commentary_request`, `ai-generated` |
+
+Danbooruの `copyright` は法律上の著作権表示という意味ではなく、主に作品・シリーズ名を
+表します。`--exclude-named` は `artist`, `copyright`, `character` をまとめて除外し、
+`general` と `meta` は残します。
+
+`meta` は範囲が広いため、`--exclude-category meta` を指定すると `ai-generated` だけでなく
+`highres`, `official_art`, `translation_request` なども除外されます。AI生成タグだけを
+除外したい場合は、カテゴリではなく個別タグを指定します。
+
+```bash
+# 作者名、シリーズ名、キャラクター名を除外
+uv run nekotagger image.png --exclude-named
+
+# AI生成を示すタグだけを除外
+uv run nekotagger image.png --exclude-tag ai-generated
+```
+
+カテゴリ情報は
+[ThetaCursed/danbooru-2026-clean-metadata](https://huggingface.co/datasets/ThetaCursed/danbooru-2026-clean-metadata)
+の `tags_dictionary.parquet`（約7.5MB）を固定revisionから取得します。Danbooru APIへは
+アクセスしません。初回だけHugging Faceから共有キャッシュへダウンロードし、2回目以降は
+ネットワークへ接続せずキャッシュを使用します。
+
+独自に取得した同じスキーマのファイルを使う場合:
+
+```bash
+uv run nekotagger image.png \
+  --exclude-category character \
+  --tag-metadata /data/tags_dictionary.parquet
+```
+
+カテゴリ辞書に存在しないタグは、誤って除外しないよう残します。現在の固定辞書では
+OppaiOracle語彙19,294件のうち18,968件を分類できます。
+
+個別タグはCLIまたはUTF-8テキストファイルで除外できます。ファイルは1行1タグで、
+空行と `#` から始まる行を無視します。空白区切りとunderscore区切りはどちらも使えます。
+
+```bash
+uv run nekotagger image.png --exclude-tag watermark --exclude-tag "blue eyes"
+uv run nekotagger image.png --exclude-tags-file exclude-tags.txt
+```
+
+除外はraw tag名に対して行い、その後に `--max-tags` とunderscore変換を適用します。
+そのため、上位タグが除外されても件数上限までは次の候補で補われます。
+
 ## デバイス
 
 ```bash

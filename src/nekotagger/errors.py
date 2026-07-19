@@ -15,3 +15,7 @@ class ConflictError(NekoTaggerError):
 
 class ModelError(NekoTaggerError):
     """A model could not be downloaded, loaded, or executed."""
+
+
+class MetadataError(NekoTaggerError):
+    """Tag metadata could not be downloaded, loaded, or validated."""

@@ -21,8 +21,16 @@ from nekotagger.output import (
     resolve_output_conflicts,
     write_text_atomic,
 )
+from nekotagger.tag_filters import (
+    NAMED_CATEGORIES,
+    PredictionFilter,
+    TagCategory,
+    load_excluded_tags,
+    normalize_tag_name,
+)
+from nekotagger.tag_metadata import lookup_category_exclusions
 from nekotagger.taggers.registry import create_tagger, tagger_names
-from nekotagger.types import Tagger, TagPrediction
+from nekotagger.types import Tagger, TagPrediction, VocabularyProvider
 
 T = TypeVar("T")
 
@@ -101,6 +109,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep raw tag underscores instead of converting them to spaces",
     )
     parser.add_argument(
+        "--exclude-category",
+        action="append",
+        choices=tuple(category.value for category in TagCategory),
+        default=[],
+        metavar="CATEGORY",
+        help=(
+            "exclude a tag category; repeat for multiple categories "
+            "(general, artist, copyright, character, meta)"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-named",
+        action="store_true",
+        help="exclude artist, copyright, and character tags",
+    )
+    parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        default=[],
+        metavar="TAG",
+        help="exclude one exact raw tag; repeat for multiple tags",
+    )
+    parser.add_argument(
+        "--exclude-tags-file",
+        action="append",
+        type=Path,
+        default=[],
+        metavar="FILE",
+        help="exclude raw tags listed one per line in a UTF-8 file",
+    )
+    parser.add_argument(
+        "--tag-metadata",
+        type=Path,
+        metavar="PARQUET",
+        help="use a local tags_dictionary.parquet for category filtering",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -115,6 +160,12 @@ def _validate_numeric_options(args: argparse.Namespace) -> None:
         raise InputError("--max-tags must be 0 or greater")
     if args.batch_size is not None and args.batch_size <= 0:
         raise InputError("--batch-size must be greater than 0")
+    if args.tag_metadata is not None and not (
+        args.exclude_category or args.exclude_named
+    ):
+        raise InputError(
+            "--tag-metadata requires --exclude-category or --exclude-named"
+        )
 
 
 def _conflict_mode(args: argparse.Namespace) -> ConflictMode:
@@ -137,7 +188,65 @@ def _format_predictions(
     return ", ".join(names)
 
 
-def _load_tagger(args: argparse.Namespace) -> tuple[Tagger, float, int | None, int]:
+def _build_prediction_filter(
+    args: argparse.Namespace,
+    tagger: Tagger,
+    max_tags: int | None,
+) -> PredictionFilter:
+    excluded_tags = set(
+        load_excluded_tags(args.exclude_tag, args.exclude_tags_file)
+    )
+    vocabulary = (
+        tagger.vocabulary
+        if isinstance(tagger, VocabularyProvider)
+        else None
+    )
+    categories = {
+        TagCategory(category_name)
+        for category_name in args.exclude_category
+    }
+    if args.exclude_named:
+        categories.update(NAMED_CATEGORIES)
+    if categories:
+        if vocabulary is None:
+            raise InputError(
+                f"tagger {args.tagger} does not expose a vocabulary "
+                "required for category filtering"
+            )
+        lookup = lookup_category_exclusions(
+            vocabulary,
+            categories,
+            metadata_path=args.tag_metadata,
+        )
+        excluded_tags.update(lookup.excluded_tags)
+        category_text = ", ".join(
+            category.value for category in sorted(categories, key=lambda item: item.value)
+        )
+        print(
+            f"Tag metadata matched {lookup.matched_count}/{lookup.vocabulary_count} "
+            f"vocabulary tags; {lookup.unknown_count} unknown tag(s) will be kept.",
+            file=sys.stderr,
+        )
+        print(
+            f"Excluding {len(lookup.excluded_tags)} tag(s) in categories: "
+            f"{category_text}",
+            file=sys.stderr,
+        )
+    if vocabulary is not None:
+        normalized_vocabulary = {
+            normalize_tag_name(tag_name)
+            for tag_name in vocabulary
+        }
+        excluded_tags.intersection_update(normalized_vocabulary)
+    return PredictionFilter(
+        excluded_tags=frozenset(excluded_tags),
+        max_tags=max_tags,
+    )
+
+
+def _load_tagger(
+    args: argparse.Namespace,
+) -> tuple[Tagger, float, PredictionFilter, int]:
     tagger = create_tagger(
         args.tagger,
         variant=args.variant,
@@ -158,7 +267,26 @@ def _load_tagger(args: argparse.Namespace) -> tuple[Tagger, float, int | None, i
         f"Using {args.tagger} {args.variant} on {tagger.active_device}",
         file=sys.stderr,
     )
-    return tagger, threshold, max_tags, int(batch_size)
+    prediction_filter = _build_prediction_filter(args, tagger, max_tags)
+    return tagger, threshold, prediction_filter, int(batch_size)
+
+
+def _predict_batch(
+    tagger: Tagger,
+    images: Sequence[Image.Image],
+    *,
+    threshold: float,
+    prediction_filter: PredictionFilter,
+) -> list[list[TagPrediction]]:
+    raw_predictions = tagger.predict_batch(
+        images,
+        threshold=threshold,
+        max_tags=None if prediction_filter.has_exclusions else prediction_filter.max_tags,
+    )
+    return [
+        prediction_filter.apply(predictions)
+        for predictions in raw_predictions
+    ]
 
 
 def _run_single_file(path: Path, args: argparse.Namespace) -> int:
@@ -178,11 +306,12 @@ def _run_single_file(path: Path, args: argparse.Namespace) -> int:
     except Exception as error:
         raise InputError(f"failed to open image {path}: {error}") from error
     try:
-        tagger, threshold, max_tags, _ = _load_tagger(args)
-        predictions = tagger.predict_batch(
+        tagger, threshold, prediction_filter, _ = _load_tagger(args)
+        predictions = _predict_batch(
+            tagger,
             [image],
             threshold=threshold,
-            max_tags=max_tags,
+            prediction_filter=prediction_filter,
         )
     finally:
         image.close()
@@ -226,7 +355,7 @@ def _run_directory(root: Path, args: argparse.Namespace) -> int:
         stderr=sys.stderr,
     )
 
-    tagger, threshold, max_tags, batch_size = _load_tagger(args)
+    tagger, threshold, prediction_filter, batch_size = _load_tagger(args)
     failures: list[tuple[Path, str]] = []
     written = 0
     batches = _iter_batches(jobs, batch_size)
@@ -248,10 +377,11 @@ def _run_directory(root: Path, args: argparse.Namespace) -> int:
         if not loaded:
             continue
         try:
-            predictions = tagger.predict_batch(
+            predictions = _predict_batch(
+                tagger,
                 [image for _, image in loaded],
                 threshold=threshold,
-                max_tags=max_tags,
+                prediction_filter=prediction_filter,
             )
             if len(predictions) != len(loaded):
                 raise ModelError(

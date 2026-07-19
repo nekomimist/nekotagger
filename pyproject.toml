@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=1.26,<3",
     "onnxruntime-gpu[cuda,cudnn]==1.23.2",
     "pillow>=10.3,<13",
+    "pyarrow>=18,<24",
     "tqdm>=4.66,<5",
 ]
 
@@ -51,5 +52,5 @@ strict = true
 packages = ["nekotagger"]
 
 [[tool.mypy.overrides]]
-module = ["onnxruntime"]
+module = ["onnxruntime", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
