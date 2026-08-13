@@ -212,7 +212,13 @@ NEKOTAGGER_TEST_DEVICE=cuda:0 uv run pytest --run-model tests/test_model_smoke.p
 `Tagger` protocolを実装しregistryへ登録します。モデル自身がタグカテゴリを持つ場合は
 `CategoryProvider` protocolも実装すると、外部のカテゴリ辞書なしで除外できます。
 
-## モデルの注意事項とライセンス
+## ライセンス
+
+nekotagger本体は[BSD Zero Clause License（0BSD）](LICENSE)で提供します。外部から
+取得するモデル、メタデータ、依存パッケージには、それぞれの配布元が定めるライセンスが
+適用されます。
+
+### モデルの注意事項
 
 OppaiOracleモデルはApache License 2.0で配布されています。モデル作者は、色、髪の長さ、
 身体サイズ、小物などの隣接タグに学習データ由来の混同があり、出力は人間が確認するよう
